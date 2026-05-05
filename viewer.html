@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JSnitch Viewer</title>
+    <link rel="stylesheet" href="viewer.css" />
+  </head>
+  <body>
+    <main class="viewer">
+      <header class="viewer-header">
+        <div>
+          <p class="eyebrow">JSnitch Match</p>
+          <h1 id="resourceTitle">Loading resource…</h1>
+        </div>
+        <div class="meta">
+          <span id="resourceKeyword" class="pill">keyword</span>
+          <span id="resourcePosition" class="pill">line 0, col 0</span>
+        </div>
+      </header>
+
+      <section class="resource-shell">
+        <div class="toolbar">
+          <a id="openSourceLink" class="toolbar-link" target="_blank" rel="noreferrer">Open original file</a>
+        </div>
+        <div id="sourceStatus" class="status">Fetching source…</div>
+        <div id="sourceContainer" class="source-container" hidden>
+          <pre id="sourceCode" class="source-code"></pre>
+        </div>
+      </section>
+    </main>
+
+    <script src="viewer.js"></script>
+  </body>
+</html>

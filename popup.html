@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JSnitch</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Passive Recon</p>
+          <h1>JSnitch</h1>
+        </div>
+        <span id="monitoringPill" class="pill pill-off">Idle</span>
+      </header>
+
+      <section class="controls">
+        <button id="startButton" class="button button-primary">Start</button>
+        <button id="stopButton" class="button button-secondary">Stop</button>
+        <button id="clearButton" class="button button-tertiary">Clear</button>
+      </section>
+
+      <nav class="primary-tabs" aria-label="Views">
+        <button class="primary-tab-button is-active" data-view="scanner">Scanner</button>
+        <button class="primary-tab-button" data-view="network">Network</button>
+      </nav>
+
+      <section class="view-panel is-active" data-view-panel="scanner">
+        <nav class="tabs" aria-label="Scanner sections">
+          <button class="tab-button is-active" data-tab="findings">Findings</button>
+          <button class="tab-button" data-tab="report">Report</button>
+          <button class="tab-button" data-tab="cookies">Cookies</button>
+          <button class="tab-button" data-tab="structure">Structure</button>
+        </nav>
+
+        <section class="status">
+          <div class="status-card">
+            <span class="status-label">State</span>
+            <span id="monitoringStatus" class="status-value">Off</span>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Scanned</span>
+            <span id="scannedCount" class="status-value">0</span>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Pending</span>
+            <span id="pendingCount" class="status-value">0</span>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Findings</span>
+            <span id="findingsCount" class="status-value">0</span>
+          </div>
+        </section>
+
+        <section class="panel tab-panel is-active" data-panel="findings">
+          <div class="findings-header">
+            <h2>Findings</h2>
+            <span id="findingsSubhead" class="findings-subhead">No matches</span>
+          </div>
+          <div id="findingsList" class="findings-list">
+            <div class="empty-state">No findings yet.</div>
+          </div>
+        </section>
+
+        <section class="panel tab-panel" data-panel="report">
+          <div class="findings-header">
+            <h2>Report</h2>
+            <span id="reportSubhead" class="findings-subhead">No files</span>
+          </div>
+          <div id="reportList" class="findings-list">
+            <div class="empty-state">No analyzed files yet.</div>
+          </div>
+        </section>
+
+        <section class="panel tab-panel" data-panel="cookies">
+          <div class="findings-header">
+            <h2>Cookies</h2>
+            <span id="cookiesSubhead" class="findings-subhead">No cookies</span>
+          </div>
+          <div id="cookiesList" class="findings-list">
+            <div class="empty-state">No cookies for this domain.</div>
+          </div>
+        </section>
+
+        <section class="panel tab-panel" data-panel="structure">
+          <div class="findings-header">
+            <h2>Structure</h2>
+            <span id="structureSubhead" class="findings-subhead">No paths</span>
+          </div>
+          <div id="structureTree" class="findings-list">
+            <div class="empty-state">No structure mapped yet.</div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view-panel" data-view-panel="network">
+        <section class="status network-status">
+          <div class="status-card">
+            <span class="status-label">Captured</span>
+            <span id="requestsCount" class="status-value">0</span>
+          </div>
+          <div class="status-card">
+            <span class="status-label">Selected</span>
+            <span id="selectedRequestType" class="status-value">None</span>
+          </div>
+        </section>
+
+        <section class="panel network-panel">
+          <div class="network-list">
+            <div class="findings-header">
+              <h2>Requests</h2>
+              <span id="networkSubhead" class="findings-subhead">No requests</span>
+            </div>
+            <div id="networkRequestsList" class="network-requests-list">
+              <div class="empty-state">No intercepted requests yet.</div>
+            </div>
+          </div>
+
+          <div class="network-details">
+            <div class="findings-header">
+              <h2>Analyze</h2>
+              <span id="networkDetailMeta" class="findings-subhead">Select a request</span>
+            </div>
+            <div id="networkDetailBody" class="network-detail-body">
+              <div class="empty-state">Choose a request and click Analyze.</div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
