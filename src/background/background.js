@@ -2,6 +2,7 @@ import { scanContent } from "../core/scanner.js";
 
 const MAX_CONTENT_SIZE = 500 * 1024;
 const STORAGE_KEY = "jsnitch-state-v1";
+const MAX_INLINE_RESOURCE_ITEMS = 12;
 const trackedContentTypes = [
   "application/javascript",
   "text/javascript",
@@ -207,6 +208,25 @@ function buildResourceRecord(url, contentType, content, findingsCount) {
   };
 }
 
+function buildResourceReportRecord(resource) {
+  const relatedFindings = findings.filter((item) => item.url === resource.url);
+  const highCount = relatedFindings.filter((item) => item.severity === "high").length;
+  const criticalCount = relatedFindings.filter((item) => item.severity === "critical").length;
+  const topSeverityScore = relatedFindings.reduce((best, item) => Math.max(best, item.severityScore || 0), 0);
+  const topSeverity = relatedFindings
+    .find((item) => (item.severityScore || 0) === topSeverityScore)?.severity || "low";
+  const uniqueDetectors = new Set(relatedFindings.map((item) => item.detectorId)).size;
+
+  return {
+    ...resource,
+    findingsCount: relatedFindings.length,
+    highCount,
+    criticalCount,
+    topSeverity,
+    uniqueDetectors
+  };
+}
+
 function normalizeHeaders(headers) {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return {};
@@ -294,7 +314,7 @@ function parseOriginScope(scopeUrl) {
 }
 
 function listResourcesForScope(scope) {
-  const resources = Array.from(analyzedResources.values());
+  const resources = Array.from(analyzedResources.values()).map(buildResourceReportRecord);
 
   if (!scope) {
     return resources;
@@ -307,6 +327,161 @@ function listResourcesForScope(scope) {
       return false;
     }
   });
+}
+
+function buildInlineResourceUrl(pageUrl, resourceId) {
+  const normalizedPageUrl = normalizeUrl(pageUrl);
+  if (!normalizedPageUrl) {
+    return null;
+  }
+
+  return `${normalizedPageUrl}#jsnitch-${resourceId}`;
+}
+
+function storeInlineResources(pageUrl, resources) {
+  if (!monitoring || !Array.isArray(resources)) {
+    return;
+  }
+
+  const subset = resources.slice(0, MAX_INLINE_RESOURCE_ITEMS);
+
+  for (const resource of subset) {
+    const resourceUrl = buildInlineResourceUrl(pageUrl, resource.id || resource.type || "inline");
+    if (!resourceUrl) {
+      continue;
+    }
+
+    const content = String(resource.content || "").slice(0, MAX_CONTENT_SIZE);
+    if (!content.trim()) {
+      continue;
+    }
+
+    analyzedResources.set(
+      resourceUrl,
+      buildResourceRecord(resourceUrl, resource.contentType || "text/plain", content, 0)
+    );
+    const newFindings = scanContent(resourceUrl, content);
+    analyzedResources.set(
+      resourceUrl,
+      buildResourceRecord(resourceUrl, resource.contentType || "text/plain", content, newFindings.length)
+    );
+    scannedUrls.add(resourceUrl);
+    addFindings(newFindings);
+  }
+
+  schedulePersistState();
+}
+
+function groupFindings(items) {
+  const grouped = new Map();
+
+  for (const item of items) {
+    const matchValue = String(item.matchedText || item.keyword || "").toLowerCase();
+    const groupKey = `${item.url}|${item.detectorId}|${matchValue}`;
+    const existing = grouped.get(groupKey);
+
+    if (!existing) {
+      grouped.set(groupKey, {
+        ...item,
+        occurrences: 1,
+        lines: [item.line].filter(Boolean)
+      });
+      continue;
+    }
+
+    existing.occurrences += 1;
+    if (item.line && !existing.lines.includes(item.line) && existing.lines.length < 5) {
+      existing.lines.push(item.line);
+    }
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => {
+    const scoreDelta = (right.score || 0) - (left.score || 0);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+
+    const occurrenceDelta = (right.occurrences || 0) - (left.occurrences || 0);
+    if (occurrenceDelta !== 0) {
+      return occurrenceDelta;
+    }
+
+    return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
+  });
+}
+
+function extractEndpointsFromText(sourceUrl, content, sourceKind) {
+  const results = [];
+  const seen = new Set();
+  const text = String(content || "");
+  const patterns = [
+    { type: "absolute-url", regex: /\bhttps?:\/\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/g },
+    { type: "api-path", regex: /(?:"|')((?:\/api|\/graphql|\/v1|\/v2|\/rest)[^"'`\s<>{}]*)/g },
+    { type: "relative-path", regex: /(?:"|')((?:\/[A-Za-z0-9._~!$&'()*+,;=:@%-]+\/[A-Za-z0-9._~!$&'()*+,;=:@%\/-]*))/g }
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.regex.exec(text)) !== null && results.length < 150) {
+      const raw = match[1] || match[0];
+      const normalized = raw.replace(/^['"]|['"]$/g, "");
+      if (normalized.length < 4) {
+        continue;
+      }
+
+      const key = `${pattern.type}:${normalized}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      results.push({
+        id: `${sourceUrl}:${pattern.type}:${match.index}`,
+        value: normalized,
+        type: pattern.type,
+        sourceUrl,
+        sourceKind
+      });
+    }
+  }
+
+  return results;
+}
+
+function buildEndpoints(resources, requests) {
+  const endpoints = [];
+  const seen = new Set();
+
+  for (const resource of resources) {
+    for (const endpoint of extractEndpointsFromText(resource.url, resource.content, resource.kind)) {
+      if (seen.has(endpoint.value)) {
+        continue;
+      }
+
+      seen.add(endpoint.value);
+      endpoints.push(endpoint);
+    }
+  }
+
+  for (const request of requests) {
+    const value = request.responseUrl || request.url;
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    endpoints.push({
+      id: `${request.id}:request-endpoint`,
+      value,
+      type: "network-request",
+      sourceUrl: request.url,
+      sourceKind: request.type
+    });
+  }
+
+  return endpoints
+    .sort((left, right) => left.value.localeCompare(right.value))
+    .slice(0, 250);
 }
 
 function buildCustomSearchResults(resources, query) {
@@ -370,6 +545,61 @@ function buildCustomSearchResults(resources, query) {
   }
 
   return results;
+}
+
+function buildSearchResults(resources, requests, query) {
+  const resourceResults = buildCustomSearchResults(resources, query).map((item) => ({
+    ...item,
+    sourceType: "resource"
+  }));
+
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) {
+    return resourceResults;
+  }
+
+  const requestResults = [];
+
+  for (const request of requests) {
+    const fields = [
+      ["url", request.url],
+      ["payload", request.payload],
+      ["response", request.response],
+      ["request headers", JSON.stringify(request.requestHeaders || {})],
+      ["response headers", JSON.stringify(request.responseHeaders || {})]
+    ];
+
+    for (const [field, value] of fields) {
+      const haystack = String(value || "");
+      const lowered = haystack.toLowerCase();
+      const matchIndex = lowered.indexOf(normalizedQuery);
+      if (matchIndex === -1) {
+        continue;
+      }
+
+      const snippetStart = Math.max(0, matchIndex - 80);
+      const snippetEnd = Math.min(haystack.length, matchIndex + normalizedQuery.length + 80);
+      requestResults.push({
+        id: `${request.id}:${field}:${matchIndex}`,
+        url: request.url,
+        kind: `${request.type} ${field}`,
+        match: query,
+        snippet: haystack.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim(),
+        matchIndex,
+        matchLength: normalizedQuery.length,
+        line: 1,
+        column: matchIndex + 1,
+        sourceType: "network"
+      });
+      break;
+    }
+
+    if (requestResults.length >= 100) {
+      break;
+    }
+  }
+
+  return [...resourceResults, ...requestResults].slice(0, 200);
 }
 
 function listNetworkRequestsForScope(scope, tabId) {
@@ -578,8 +808,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       const cookies = await getCookiesForScope(scope);
       const requests = listNetworkRequestsForScope(scope, tabId);
-      const customSearchResults = buildCustomSearchResults(
+      const groupedFindings = groupFindings(scopedFindings);
+      const customSearchResults = buildSearchResults(
         scopedResources,
+        requests,
         message.customQuery || ""
       );
 
@@ -591,13 +823,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         counts: {
           scanned: scannedUrls.size,
           pending: pendingUrls.size,
-          findings: findings.length,
+          findings: groupedFindings.length,
           requests: requests.length
         },
-        findings: scopedFindings,
+        findings: groupedFindings,
         report: scopedResources,
         cookies,
         structure: buildStructure(scopedResources),
+        endpoints: buildEndpoints(scopedResources, requests),
         customSearchResults
       });
       return;
@@ -619,19 +852,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
       });
       const requests = listNetworkRequestsForScope(scope, tabId);
+      const groupedFindings = groupFindings(scopedFindings);
 
       sendResponse({
         ok: true,
         exportedAt: new Date().toISOString(),
         scope,
         monitoring,
-        findings: scopedFindings,
+        findings: groupedFindings,
         report,
         networkRequests: requests,
+        endpoints: buildEndpoints(report, requests),
         counts: {
           scanned: scannedUrls.size,
           pending: pendingUrls.size,
-          findings: scopedFindings.length,
+          findings: groupedFindings.length,
           requests: requests.length
         }
       });
@@ -655,6 +890,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ...message.request,
         tabId: _sender?.tab?.id ?? null
       });
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (message?.type === "STORE_INLINE_RESOURCES") {
+      storeInlineResources(message.pageUrl, message.resources);
       sendResponse({ ok: true });
     }
   })();

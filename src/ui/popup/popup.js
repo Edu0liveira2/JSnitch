@@ -16,6 +16,8 @@ const reportList = document.getElementById("reportList");
 const reportSubhead = document.getElementById("reportSubhead");
 const cookiesList = document.getElementById("cookiesList");
 const cookiesSubhead = document.getElementById("cookiesSubhead");
+const endpointsList = document.getElementById("endpointsList");
+const endpointsSubhead = document.getElementById("endpointsSubhead");
 const structureTree = document.getElementById("structureTree");
 const structureSubhead = document.getElementById("structureSubhead");
 const customSearchInput = document.getElementById("customSearchInput");
@@ -94,6 +96,10 @@ function titleCase(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+function canJumpToViewer(url) {
+  return !String(url || "").includes("#jsnitch-");
+}
+
 function renderFindings(items) {
   if (!items.length) {
     findingsList.innerHTML = '<div class="empty-state">No findings yet.</div>';
@@ -111,21 +117,26 @@ function renderFindings(items) {
               <div class="finding-keyword">${escapeHtml(item.keyword)}</div>
               <div class="finding-severity finding-severity-${escapeHtml(item.severity || "low")}">${escapeHtml(titleCase(item.severity || "low"))}</div>
               <div class="finding-confidence">${escapeHtml(titleCase(item.confidence || "low"))} confidence</div>
+              ${item.occurrences > 1 ? `<div class="finding-occurrences">${item.occurrences} hits</div>` : ""}
             </div>
-            <button
-              class="finding-jump"
-              data-url="${encodeURIComponent(item.url)}"
-              data-keyword="${encodeURIComponent(item.keyword)}"
-              data-index="${item.matchIndex ?? 0}"
-              data-length="${item.matchLength ?? item.keyword.length}"
-              data-line="${item.line ?? 1}"
-              data-column="${item.column ?? 1}"
-            >
-              Jump to match
-            </button>
+            ${
+              canJumpToViewer(item.url)
+                ? `<button
+                    class="finding-jump"
+                    data-url="${encodeURIComponent(item.url)}"
+                    data-keyword="${encodeURIComponent(item.keyword)}"
+                    data-index="${item.matchIndex ?? 0}"
+                    data-length="${item.matchLength ?? item.keyword.length}"
+                    data-line="${item.line ?? 1}"
+                    data-column="${item.column ?? 1}"
+                  >
+                    Jump to match
+                  </button>`
+                : `<span class="finding-confidence">Inline</span>`
+            }
           </div>
           <div class="finding-url">${escapeHtml(item.url)}</div>
-          <div class="finding-meta">${escapeHtml(titleCase(item.detectorKind || "keyword"))} · Line ${item.line ?? 1}, Column ${item.column ?? 1}</div>
+          <div class="finding-meta">${escapeHtml(titleCase(item.detectorKind || "keyword"))} · Line ${item.line ?? 1}, Column ${item.column ?? 1}${item.lines?.length > 1 ? ` · Also ${escapeHtml(item.lines.slice(1).join(", "))}` : ""}</div>
           <div class="finding-rationale">${escapeHtml(item.rationale || "")}</div>
           <div class="finding-snippet">${escapeHtml(item.snippet)}</div>
         </article>
@@ -148,10 +159,34 @@ function renderReport(items) {
         <article class="report-row">
           <div class="report-top">
             <div class="report-kind">${escapeHtml(item.kind)}</div>
-            <div class="finding-meta">${item.findingsCount} matches</div>
+            <div class="report-score report-score-${escapeHtml(item.topSeverity || "low")}">${escapeHtml(titleCase(item.topSeverity || "low"))}</div>
           </div>
           <div class="report-url">${escapeHtml(item.url)}</div>
-          <div class="report-meta">${escapeHtml(item.contentType)} · ${item.size} chars</div>
+          <div class="report-meta">${escapeHtml(item.contentType)} · ${item.size} chars · ${item.findingsCount} matches · ${item.highCount || 0} high · ${item.criticalCount || 0} critical · ${item.uniqueDetectors || 0} detectors</div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderEndpoints(items) {
+  if (!items.length) {
+    endpointsList.innerHTML = '<div class="empty-state">No endpoints extracted yet.</div>';
+    endpointsSubhead.textContent = "No endpoints";
+    return;
+  }
+
+  endpointsSubhead.textContent = `${items.length} extracted`;
+  endpointsList.innerHTML = items
+    .map(
+      (item) => `
+        <article class="report-row">
+          <div class="report-top">
+            <div class="report-kind">${escapeHtml(item.type)}</div>
+            <div class="finding-meta">${escapeHtml(item.sourceKind || "resource")}</div>
+          </div>
+          <div class="report-url">${escapeHtml(item.value)}</div>
+          <div class="report-meta">${escapeHtml(item.sourceUrl)}</div>
         </article>
       `
     )
@@ -245,17 +280,21 @@ function renderCustomSearchResults(items) {
         <article class="search-result-row">
           <div class="finding-top">
             <div class="search-kind">${escapeHtml(item.kind)}</div>
-            <button
-              class="finding-jump"
-              data-url="${encodeURIComponent(item.url)}"
-              data-keyword="${encodeURIComponent(item.match)}"
-              data-index="${item.matchIndex ?? 0}"
-              data-length="${item.matchLength ?? item.match.length}"
-              data-line="${item.line ?? 1}"
-              data-column="${item.column ?? 1}"
-            >
-              Jump to match
-            </button>
+            ${
+              item.sourceType !== "network" && canJumpToViewer(item.url)
+                ? `<button
+                    class="finding-jump"
+                    data-url="${encodeURIComponent(item.url)}"
+                    data-keyword="${encodeURIComponent(item.match)}"
+                    data-index="${item.matchIndex ?? 0}"
+                    data-length="${item.matchLength ?? item.match.length}"
+                    data-line="${item.line ?? 1}"
+                    data-column="${item.column ?? 1}"
+                  >
+                    Jump to match
+                  </button>`
+                : `<span class="finding-confidence">Network</span>`
+            }
           </div>
           <div class="search-result-url">${escapeHtml(item.url)}</div>
           <div class="finding-meta">Line ${item.line ?? 1}, Column ${item.column ?? 1}</div>
@@ -576,6 +615,7 @@ function renderState(state) {
   renderFindings(state.findings || []);
   renderReport(state.report || []);
   renderCookies(state.cookies || []);
+  renderEndpoints(state.endpoints || []);
   renderStructure(state.structure || {});
   renderCustomSearchResults(state.customSearchResults || []);
   renderNetworkRequests(state.networkRequests || []);
@@ -597,6 +637,14 @@ async function refreshState() {
 
 async function startMonitoring() {
   await sendMessage("START_MONITORING");
+  const currentTab = await getCurrentTab();
+  if (currentTab?.id != null) {
+    try {
+      await chrome.tabs.sendMessage(currentTab.id, { type: "REQUEST_INLINE_SNAPSHOT" });
+    } catch {
+      // Ignore snapshot requests on pages without an active content script bridge.
+    }
+  }
   await refreshState();
 }
 

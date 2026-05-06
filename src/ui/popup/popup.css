@@ -116,7 +116,7 @@ body {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 8px;
   margin-bottom: 14px;
 }
@@ -344,7 +344,9 @@ body {
 }
 
 .finding-severity,
-.finding-confidence {
+.finding-confidence,
+.finding-occurrences,
+.report-score {
   display: inline-flex;
   align-items: center;
   min-height: 24px;
@@ -379,6 +381,27 @@ body {
 .finding-confidence {
   background: rgba(23, 23, 23, 0.05);
   color: var(--muted);
+}
+
+.finding-occurrences {
+  background: rgba(15, 118, 110, 0.1);
+  color: var(--accent);
+}
+
+.report-score {
+  background: rgba(23, 23, 23, 0.05);
+  color: var(--muted);
+}
+
+.report-score-medium {
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--accent);
+}
+
+.report-score-high,
+.report-score-critical {
+  background: rgba(180, 83, 9, 0.12);
+  color: var(--warn);
 }
 
 .finding-jump {
