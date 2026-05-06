@@ -7,13 +7,14 @@
     "scripting",
     "activeTab",
     "webRequest",
-    "cookies"
+    "cookies",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "src/background/background.js",
     "type": "module"
   },
   "content_scripts": [
@@ -22,7 +23,7 @@
         "<all_urls>"
       ],
       "js": [
-        "content.js"
+        "src/content/content.js"
       ],
       "run_at": "document_start"
     }
@@ -30,7 +31,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "injected.js"
+        "src/content/injected.js"
       ],
       "matches": [
         "<all_urls>"
@@ -39,6 +40,6 @@
   ],
   "action": {
     "default_title": "JSnitch",
-    "default_popup": "popup.html"
+    "default_popup": "src/ui/popup/popup.html"
   }
 }

@@ -22,6 +22,11 @@
         <button id="clearButton" class="button button-tertiary">Clear</button>
       </section>
 
+      <section class="export-controls">
+        <button id="exportJsonButton" class="button button-secondary">Export JSON</button>
+        <button id="exportMarkdownButton" class="button button-secondary">Export Markdown</button>
+      </section>
+
       <nav class="primary-tabs" aria-label="Views">
         <button class="primary-tab-button is-active" data-view="scanner">Scanner</button>
         <button class="primary-tab-button" data-view="network">Network</button>
@@ -33,6 +38,7 @@
           <button class="tab-button" data-tab="report">Report</button>
           <button class="tab-button" data-tab="cookies">Cookies</button>
           <button class="tab-button" data-tab="structure">Structure</button>
+          <button class="tab-button" data-tab="search">Search</button>
         </nav>
 
         <section class="status">
@@ -93,6 +99,20 @@
             <div class="empty-state">No structure mapped yet.</div>
           </div>
         </section>
+
+        <section class="panel tab-panel" data-panel="search">
+          <div class="findings-header">
+            <h2>Custom Search</h2>
+            <span id="searchSubhead" class="findings-subhead">No query</span>
+          </div>
+          <div class="search-controls">
+            <input id="customSearchInput" class="search-input" type="text" placeholder="Search any word or string" />
+            <button id="customSearchButton" class="button button-secondary">Search</button>
+          </div>
+          <div id="customSearchResults" class="findings-list">
+            <div class="empty-state">Run a search across analyzed resources.</div>
+          </div>
+        </section>
       </section>
 
       <section class="view-panel" data-view-panel="network">
@@ -112,6 +132,18 @@
             <div class="findings-header">
               <h2>Requests</h2>
               <span id="networkSubhead" class="findings-subhead">No requests</span>
+            </div>
+            <div class="network-filter-bar">
+              <label class="filter-label" for="methodFilter">Method</label>
+              <select id="methodFilter" class="method-filter">
+                <option value="ALL">All</option>
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+                <option value="OPTIONS">OPTIONS</option>
+              </select>
             </div>
             <div id="networkRequestsList" class="network-requests-list">
               <div class="empty-state">No intercepted requests yet.</div>

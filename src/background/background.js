@@ -1,6 +1,7 @@
-import { scanContent } from "./scanner.js";
+import { scanContent } from "../core/scanner.js";
 
 const MAX_CONTENT_SIZE = 500 * 1024;
+const STORAGE_KEY = "jsnitch-state-v1";
 const trackedContentTypes = [
   "application/javascript",
   "text/javascript",
@@ -17,6 +18,8 @@ const networkRequests = [];
 const networkRequestIds = new Set();
 const MAX_NETWORK_ITEMS = 300;
 const MAX_NETWORK_TEXT = 200 * 1024;
+let persistTimer = null;
+const stateReady = loadPersistedState();
 
 function normalizeUrl(rawUrl) {
   try {
@@ -30,6 +33,84 @@ function normalizeUrl(rawUrl) {
     return url.toString();
   } catch {
     return null;
+  }
+}
+
+async function loadPersistedState() {
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEY);
+    const snapshot = stored?.[STORAGE_KEY];
+    if (!snapshot || typeof snapshot !== "object") {
+      return;
+    }
+
+    monitoring = Boolean(snapshot.monitoring);
+
+    scannedUrls.clear();
+    for (const url of snapshot.scannedUrls || []) {
+      const normalized = normalizeUrl(url);
+      if (normalized) {
+        scannedUrls.add(normalized);
+      }
+    }
+
+    pendingUrls.clear();
+
+    findings.length = 0;
+    findings.push(...Array.isArray(snapshot.findings) ? snapshot.findings : []);
+
+    analyzedResources.clear();
+    for (const resource of snapshot.analyzedResources || []) {
+      if (!resource?.url) {
+        continue;
+      }
+
+      analyzedResources.set(resource.url, resource);
+    }
+
+    networkRequests.length = 0;
+    networkRequestIds.clear();
+    for (const request of snapshot.networkRequests || []) {
+      if (!request?.id) {
+        continue;
+      }
+
+      networkRequests.push(request);
+      networkRequestIds.add(request.id);
+    }
+  } catch (error) {
+    console.warn("JSnitch storage hydrate failed:", error);
+  }
+}
+
+function buildPersistedState() {
+  return {
+    monitoring,
+    scannedUrls: Array.from(scannedUrls),
+    findings,
+    analyzedResources: Array.from(analyzedResources.values()),
+    networkRequests
+  };
+}
+
+function schedulePersistState() {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+  }
+
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistState();
+  }, 150);
+}
+
+async function persistState() {
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: buildPersistedState()
+    });
+  } catch (error) {
+    console.warn("JSnitch storage persist failed:", error);
   }
 }
 
@@ -62,11 +143,38 @@ function addFindings(newFindings) {
     return;
   }
 
-  findings.unshift(...newFindings);
+  const timestamp = new Date().toISOString();
+  findings.push(
+    ...newFindings.map((finding) => ({
+      ...finding,
+      createdAt: timestamp
+    }))
+  );
+
+  findings.sort((left, right) => {
+    const scoreDelta = (right.score || 0) - (left.score || 0);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+
+    const confidenceDelta = (right.confidenceScore || 0) - (left.confidenceScore || 0);
+    if (confidenceDelta !== 0) {
+      return confidenceDelta;
+    }
+
+    const severityDelta = (right.severityScore || 0) - (left.severityScore || 0);
+    if (severityDelta !== 0) {
+      return severityDelta;
+    }
+
+    return String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
+  });
 
   if (findings.length > 500) {
     findings.length = 500;
   }
+
+  schedulePersistState();
 }
 
 function classifyResource(contentType) {
@@ -93,6 +201,7 @@ function buildResourceRecord(url, contentType, content, findingsCount) {
     contentType,
     kind: classifyResource(contentType),
     size: content.length,
+    content,
     findingsCount,
     scannedAt: new Date().toISOString()
   };
@@ -106,6 +215,18 @@ function normalizeHeaders(headers) {
   return Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key, String(value)])
   );
+}
+
+function normalizeStatusCode(value) {
+  const code = Number(value);
+  return Number.isFinite(code) && code >= 0 ? code : null;
+}
+
+function normalizeDurationMs(value) {
+  const duration = Number(value);
+  return Number.isFinite(duration) && duration >= 0
+    ? Math.round(duration * 100) / 100
+    : null;
 }
 
 function normalizeTextPayload(value) {
@@ -131,10 +252,18 @@ function storeNetworkRequest(entry) {
     id: entry.id,
     url: normalizedUrl,
     method: String(entry.method || "GET").toUpperCase(),
-    headers: normalizeHeaders(entry.headers),
+    requestHeaders: normalizeHeaders(entry.requestHeaders || entry.headers),
+    responseHeaders: normalizeHeaders(entry.responseHeaders),
     payload: normalizeTextPayload(entry.payload),
     response: normalizeTextPayload(entry.response) || "",
     type: entry.type === "xhr" ? "xhr" : "fetch",
+    statusCode: normalizeStatusCode(entry.statusCode),
+    statusText: entry.statusText ? String(entry.statusText) : "",
+    ok: typeof entry.ok === "boolean" ? entry.ok : null,
+    durationMs: normalizeDurationMs(entry.durationMs),
+    initiatorUrl: entry.initiatorUrl ? normalizeUrl(entry.initiatorUrl) || String(entry.initiatorUrl) : "",
+    referrer: entry.referrer ? normalizeUrl(entry.referrer) || String(entry.referrer) : "",
+    responseUrl: entry.responseUrl ? normalizeUrl(entry.responseUrl) || String(entry.responseUrl) : normalizedUrl,
     tabId: Number.isInteger(entry.tabId) ? entry.tabId : null,
     createdAt: new Date().toISOString()
   };
@@ -148,6 +277,8 @@ function storeNetworkRequest(entry) {
       networkRequestIds.delete(removed.id);
     }
   }
+
+  schedulePersistState();
 }
 
 function parseOriginScope(scopeUrl) {
@@ -176,6 +307,69 @@ function listResourcesForScope(scope) {
       return false;
     }
   });
+}
+
+function buildCustomSearchResults(resources, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const results = [];
+
+  function getLineColumn(content, index) {
+    let line = 1;
+    let column = 1;
+
+    for (let cursor = 0; cursor < index; cursor += 1) {
+      if (content[cursor] === "\n") {
+        line += 1;
+        column = 1;
+      } else {
+        column += 1;
+      }
+    }
+
+    return { line, column };
+  }
+
+  for (const resource of resources) {
+    const haystack = String(resource.content || "");
+    const lowered = haystack.toLowerCase();
+    let searchFrom = 0;
+
+    while (results.length < 200) {
+      const matchIndex = lowered.indexOf(normalizedQuery, searchFrom);
+      if (matchIndex === -1) {
+        break;
+      }
+
+      const position = getLineColumn(haystack, matchIndex);
+      const snippetStart = Math.max(0, matchIndex - 80);
+      const snippetEnd = Math.min(haystack.length, matchIndex + normalizedQuery.length + 80);
+      const snippet = haystack.slice(snippetStart, snippetEnd).replace(/\s+/g, " ").trim();
+
+      results.push({
+        id: `${resource.url}:${normalizedQuery}:${matchIndex}`,
+        url: resource.url,
+        kind: resource.kind,
+        match: query,
+        snippet,
+        matchIndex,
+        matchLength: normalizedQuery.length,
+        line: position.line,
+        column: position.column
+      });
+
+      searchFrom = matchIndex + normalizedQuery.length;
+    }
+
+    if (results.length >= 200) {
+      break;
+    }
+  }
+
+  return results;
 }
 
 function listNetworkRequestsForScope(scope, tabId) {
@@ -306,35 +500,39 @@ async function refetchAndScan(url) {
       url,
       buildResourceRecord(url, contentType, text, newFindings.length)
     );
+    schedulePersistState();
     addFindings(newFindings);
   } catch (error) {
     console.warn("JSnitch fetch failed:", url, error);
   } finally {
     pendingUrls.delete(url);
     scannedUrls.add(url);
+    schedulePersistState();
   }
 }
 
 function handleCompletedRequest(details) {
-  if (!monitoring) {
-    return;
-  }
+  void stateReady.then(() => {
+    if (!monitoring) {
+      return;
+    }
 
-  if (details.method && details.method !== "GET") {
-    return;
-  }
+    if (details.method && details.method !== "GET") {
+      return;
+    }
 
-  const url = normalizeUrl(details.url);
-  if (!url || scannedUrls.has(url) || pendingUrls.has(url)) {
-    return;
-  }
+    const url = normalizeUrl(details.url);
+    if (!url || scannedUrls.has(url) || pendingUrls.has(url)) {
+      return;
+    }
 
-  const contentType = getHeaderValue(details.responseHeaders, "content-type");
-  if (!isTrackedContentType(contentType)) {
-    return;
-  }
+    const contentType = getHeaderValue(details.responseHeaders, "content-type");
+    if (!isTrackedContentType(contentType)) {
+      return;
+    }
 
-  void refetchAndScan(url);
+    void refetchAndScan(url);
+  });
 }
 
 chrome.webRequest.onHeadersReceived.addListener(
@@ -344,20 +542,24 @@ chrome.webRequest.onHeadersReceived.addListener(
 );
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === "START_MONITORING") {
-    monitoring = true;
-    sendResponse({ ok: true, monitoring });
-    return;
-  }
+  void (async () => {
+    await stateReady;
 
-  if (message?.type === "STOP_MONITORING") {
-    monitoring = false;
-    sendResponse({ ok: true, monitoring });
-    return;
-  }
+    if (message?.type === "START_MONITORING") {
+      monitoring = true;
+      schedulePersistState();
+      sendResponse({ ok: true, monitoring });
+      return;
+    }
 
-  if (message?.type === "GET_STATE") {
-    void (async () => {
+    if (message?.type === "STOP_MONITORING") {
+      monitoring = false;
+      schedulePersistState();
+      sendResponse({ ok: true, monitoring });
+      return;
+    }
+
+    if (message?.type === "GET_STATE") {
       const scope = parseOriginScope(message.currentUrl);
       const tabId = Number.isInteger(message.tabId) ? message.tabId : null;
       const scopedResources = listResourcesForScope(scope).sort((left, right) => {
@@ -376,6 +578,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       const cookies = await getCookiesForScope(scope);
       const requests = listNetworkRequestsForScope(scope, tabId);
+      const customSearchResults = buildCustomSearchResults(
+        scopedResources,
+        message.customQuery || ""
+      );
 
       sendResponse({
         ok: true,
@@ -391,28 +597,67 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         findings: scopedFindings,
         report: scopedResources,
         cookies,
-        structure: buildStructure(scopedResources)
+        structure: buildStructure(scopedResources),
+        customSearchResults
       });
-    })();
-    return true;
-  }
+      return;
+    }
 
-  if (message?.type === "CLEAR_RESULTS") {
-    scannedUrls.clear();
-    pendingUrls.clear();
-    findings.length = 0;
-    analyzedResources.clear();
-    networkRequests.length = 0;
-    networkRequestIds.clear();
-    sendResponse({ ok: true });
-    return;
-  }
+    if (message?.type === "EXPORT_STATE") {
+      const scope = parseOriginScope(message.currentUrl);
+      const tabId = Number.isInteger(message.tabId) ? message.tabId : null;
+      const report = listResourcesForScope(scope).sort((left, right) => right.scannedAt.localeCompare(left.scannedAt));
+      const scopedFindings = findings.filter((finding) => {
+        if (!scope) {
+          return true;
+        }
 
-  if (message?.type === "STORE_NETWORK_REQUEST") {
-    storeNetworkRequest({
-      ...message.request,
-      tabId: _sender?.tab?.id ?? null
-    });
-    sendResponse({ ok: true });
-  }
+        try {
+          return new URL(finding.url).origin === scope.origin;
+        } catch {
+          return false;
+        }
+      });
+      const requests = listNetworkRequestsForScope(scope, tabId);
+
+      sendResponse({
+        ok: true,
+        exportedAt: new Date().toISOString(),
+        scope,
+        monitoring,
+        findings: scopedFindings,
+        report,
+        networkRequests: requests,
+        counts: {
+          scanned: scannedUrls.size,
+          pending: pendingUrls.size,
+          findings: scopedFindings.length,
+          requests: requests.length
+        }
+      });
+      return;
+    }
+
+    if (message?.type === "CLEAR_RESULTS") {
+      scannedUrls.clear();
+      pendingUrls.clear();
+      findings.length = 0;
+      analyzedResources.clear();
+      networkRequests.length = 0;
+      networkRequestIds.clear();
+      await persistState();
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (message?.type === "STORE_NETWORK_REQUEST") {
+      storeNetworkRequest({
+        ...message.request,
+        tabId: _sender?.tab?.id ?? null
+      });
+      sendResponse({ ok: true });
+    }
+  })();
+
+  return true;
 });

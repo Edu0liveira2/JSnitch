@@ -6,7 +6,7 @@
   window.__JSNITCH_CONTENT_ATTACHED__ = true;
 
   const script = document.createElement("script");
-  script.src = chrome.runtime.getURL("injected.js");
+  script.src = chrome.runtime.getURL("src/content/injected.js");
   script.dataset.jsnitch = "injected";
   script.async = false;
   script.addEventListener("load", () => {
@@ -28,9 +28,15 @@
       return;
     }
 
-    chrome.runtime.sendMessage({
-      type: "STORE_NETWORK_REQUEST",
-      request: payload.request
-    });
+    try {
+      chrome.runtime.sendMessage({
+        type: "STORE_NETWORK_REQUEST",
+        request: payload.request
+      }).catch(() => {
+        // Ignore reload-time bridge failures when the old page script outlives the extension context.
+      });
+    } catch {
+      // Ignore extension invalidation errors after reloads.
+    }
   });
 })();
